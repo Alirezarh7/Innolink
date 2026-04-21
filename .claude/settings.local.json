@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rustc:*)",
+      "Bash(node --version:*)",
+      "Bash(ollama:*)",
+      "Bash(winget install:*)",
+      "Bash(cargo:*)",
+      "Bash(npm create:*)",
+      "Bash(npm_config_registry=https://registry.npmjs.org npm create tauri-app@latest . -- --template react-ts -y)",
+      "Bash(npm_config_registry=https://registry.npmjs.org npm install)",
+      "Bash(where:*)",
+      "Bash(cmd.exe /c \"where /R \"\"C:\\\\Program Files\\\\Microsoft Visual Studio\"\" link.exe 2>nul\")",
+      "Bash(cmd.exe /c \"dir /s /b \"\"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\VC\\\\Tools\\\\MSVC\\\\14.44.35207\\\\bin\"\" 2>nul\")",
+      "Bash(cmd.exe /c \"dir /s /b \"\"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\VC\\\\Tools\\\\MSVC\\\\*link.exe\"\"\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path ''C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\VC\\\\Tools\\\\MSVC'' -Recurse -Filter ''link.exe'' | Select-Object -First 5 -ExpandProperty FullName\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path ''C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\VC'' -Recurse -Filter ''link.exe'' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName\")",
+      "Bash(rustup show:*)",
+      "Bash(powershell -Command \"Get-ChildItem -Path ''C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise'' -Recurse -Filter ''link.exe'' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName\")"
+    ]
+  }
+}
