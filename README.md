@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="innolink.png" alt="InnoLink" width="400" />
+</p>
+
 # InnoLink
 
 **Open-source AI Workspace Agent** built with Tauri + React + TypeScript.

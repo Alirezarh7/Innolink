@@ -32,6 +32,11 @@ body {
   border-bottom: 1px solid #2a2a2a;
 }
 
+.app-logo {
+  height: 36px;
+  width: auto;
+}
+
 .app-header h1 {
   margin: 0;
   font-size: 1.4rem;
@@ -93,6 +98,8 @@ body {
 .message p {
   margin: 0;
   white-space: pre-wrap;
+  unicode-bidi: plaintext;
+  text-align: start;
 }
 
 .message.user {
@@ -120,6 +127,16 @@ body {
   padding: 2px 8px;
   border-radius: 4px;
   margin-bottom: 6px;
+}
+
+.cursor {
+  animation: blink 0.7s infinite;
+  color: #4a9eff;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 .chat-input {

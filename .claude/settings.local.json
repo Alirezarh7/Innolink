@@ -16,7 +16,19 @@
       "Bash(powershell -Command \"Get-ChildItem -Path ''C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\VC\\\\Tools\\\\MSVC'' -Recurse -Filter ''link.exe'' | Select-Object -First 5 -ExpandProperty FullName\")",
       "Bash(powershell -Command \"Get-ChildItem -Path ''C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\VC'' -Recurse -Filter ''link.exe'' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName\")",
       "Bash(rustup show:*)",
-      "Bash(powershell -Command \"Get-ChildItem -Path ''C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise'' -Recurse -Filter ''link.exe'' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName\")"
+      "Bash(powershell -Command \"Get-ChildItem -Path ''C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise'' -Recurse -Filter ''link.exe'' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName\")",
+      "Bash(powershell -Command:*)",
+      "Bash(npm_config_registry=https://registry.npmjs.org npm run tauri dev)",
+      "Bash(npm_config_registry=https://registry.npmjs.org npm run tauri build)",
+      "Bash(npx tauri icon:*)",
+      "Bash(magick:*)",
+      "Bash(convert:*)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(taskkill:*)",
+      "Bash(ie4uinit.exe:*)",
+      "Bash(curl:*)",
+      "Bash(tasklist:*)"
     ]
   }
 }
