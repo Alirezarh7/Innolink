@@ -37,6 +37,10 @@ interface PullProgress {
   percent: number;
 }
 
+interface RunningEntry {
+  name: string;
+}
+
 const AVAILABLE_MODELS = [
   { name: "phi4", maker: "Microsoft", size: "9.1GB", desc: "Great for reasoning", color: "#00a4ef", initials: "MS" },
   { name: "qwen2.5-coder:7b", maker: "Alibaba", size: "4.7GB", desc: "Best for coding", color: "#ff6a00", initials: "QW" },
@@ -79,10 +83,12 @@ export default function AddModelPage({ onBack }: { onBack: () => void }) {
   const [installedLoading, setInstalledLoading] = useState(true);
   const [pulling, setPulling] = useState<Record<string, PullProgress>>({});
   const [deleting, setDeleting] = useState<Record<string, boolean>>({});
+  const [runningModels, setRunningModels] = useState<string[]>([]);
+  const [starting, setStarting] = useState<Record<string, boolean>>({});
+  const [stopping, setStopping] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    loadSystemInfo();
-    loadInstalledModels();
+    initPage();
     loadSavedAPIs();
 
     const unlisten = listen<PullProgress>("pull-progress", (event) => {
@@ -101,6 +107,20 @@ export default function AddModelPage({ onBack }: { onBack: () => void }) {
 
     return () => { unlisten.then((fn) => fn()); };
   }, []);
+
+  async function initPage() {
+    loadSystemInfo();
+    // Restart Ollama with multi-model support (OLLAMA_MAX_LOADED_MODELS=4)
+    try {
+      await invoke("restart_ollama");
+      // Wait for Ollama to be ready
+      await new Promise((r) => setTimeout(r, 2000));
+    } catch (err) {
+      console.error("Restart ollama error:", err);
+    }
+    loadInstalledModels();
+    loadRunningModels();
+  }
 
   async function loadSystemInfo() {
     setSysLoading(true);
@@ -122,6 +142,25 @@ export default function AddModelPage({ onBack }: { onBack: () => void }) {
       setInstalled([]);
     }
     setInstalledLoading(false);
+  }
+
+  async function loadRunningModels() {
+    try {
+      const result = await invoke<string>("list_running_models");
+      const data = JSON.parse(result);
+      const models: RunningEntry[] = data.models || [];
+      setRunningModels(models.map((m) => m.name));
+    } catch {
+      setRunningModels([]);
+    }
+  }
+
+  function isModelRunning(name: string): boolean {
+    const baseName = name.split(":")[0];
+    return runningModels.some((r) => {
+      const rBase = r.split(":")[0];
+      return r === name || rBase === baseName || r === name + ":latest" || name === r + ":latest";
+    });
   }
 
   function loadSavedAPIs() {
@@ -202,6 +241,7 @@ export default function AddModelPage({ onBack }: { onBack: () => void }) {
     try {
       await invoke("delete_model", { model: modelName });
       await loadInstalledModels();
+      await loadRunningModels();
     } catch (err) {
       console.error("Delete failed:", err);
     }
@@ -209,11 +249,25 @@ export default function AddModelPage({ onBack }: { onBack: () => void }) {
   }
 
   async function handleStop(modelName: string) {
+    setStopping((prev) => ({ ...prev, [modelName]: true }));
     try {
       await invoke("stop_model", { model: modelName });
+      await loadRunningModels();
     } catch (err) {
       console.error("Stop failed:", err);
     }
+    setStopping((prev) => ({ ...prev, [modelName]: false }));
+  }
+
+  async function handleStart(modelName: string) {
+    setStarting((prev) => ({ ...prev, [modelName]: true }));
+    try {
+      await invoke("run_model", { model: modelName });
+      await loadRunningModels();
+    } catch (err) {
+      console.error("Start failed:", err);
+    }
+    setStarting((prev) => ({ ...prev, [modelName]: false }));
   }
 
   function isInstalled(name: string): boolean {
@@ -231,7 +285,7 @@ export default function AddModelPage({ onBack }: { onBack: () => void }) {
       </div>
 
       <div className="add-model-content">
-        {/* ══════ Section A: System Specs ══════ */}
+        {/* Section A: System Specs */}
         <section className="amp-section">
           <h3>System Specs</h3>
           {sysLoading ? (
@@ -279,7 +333,7 @@ export default function AddModelPage({ onBack }: { onBack: () => void }) {
           )}
         </section>
 
-        {/* ══════ Section B: Paid API ══════ */}
+        {/* Section B: Paid API */}
         <section className="amp-section">
           <h3>Paid API Providers</h3>
 
@@ -348,7 +402,7 @@ export default function AddModelPage({ onBack }: { onBack: () => void }) {
           </div>
         </section>
 
-        {/* ══════ Section C: Local Models ══════ */}
+        {/* Section C: Local Models */}
         <section className="amp-section">
           <h3>Local Models</h3>
 
@@ -361,22 +415,56 @@ export default function AddModelPage({ onBack }: { onBack: () => void }) {
               <div className="amp-loading">No models installed</div>
             ) : (
               <div className="installed-list">
-                {installed.map((m) => (
-                  <div className="installed-row" key={m.name}>
-                    <span className="installed-name">{m.name}</span>
-                    <span className="installed-size">{m.size}</span>
-                    <div className="installed-actions">
-                      <button className="btn-small" onClick={() => handleStop(m.name)}>Stop</button>
-                      <button
-                        className="btn-small btn-danger"
-                        onClick={() => handleDelete(m.name)}
-                        disabled={deleting[m.name]}
-                      >
-                        {deleting[m.name] ? "..." : "Delete"}
-                      </button>
+                {installed.map((m) => {
+                  const running = isModelRunning(m.name);
+                  const isStarting = starting[m.name] || false;
+                  const isStopping = stopping[m.name] || false;
+                  return (
+                    <div className="installed-row" key={m.name}>
+                      <span
+                        className="installed-status-dot"
+                        style={{ background: running ? "#4caf50" : "#666" }}
+                      />
+                      <span className="installed-name">{m.name}</span>
+                      <span className="installed-size">{m.size}</span>
+                      <span className={`installed-status-text ${running ? "running" : "stopped"}`}>
+                        {isStarting ? "Starting..." : isStopping ? "Stopping..." : running ? "Running" : "Stopped"}
+                      </span>
+                      <div className="installed-actions">
+                        {running ? (
+                          <button
+                            className="btn-small btn-stop"
+                            onClick={() => handleStop(m.name)}
+                            disabled={isStopping}
+                          >
+                            {isStopping ? (
+                              <span className="btn-spinner" />
+                            ) : null}
+                            {isStopping ? "Stopping..." : "Stop"}
+                          </button>
+                        ) : (
+                          <button
+                            className="btn-small btn-start"
+                            onClick={() => handleStart(m.name)}
+                            disabled={isStarting}
+                          >
+                            {isStarting ? (
+                              <span className="btn-spinner" />
+                            ) : null}
+                            {isStarting ? "Starting..." : "Start"}
+                          </button>
+                        )}
+                        <button
+                          className="btn-small btn-danger"
+                          onClick={() => handleDelete(m.name)}
+                          disabled={deleting[m.name] || running || isStarting || isStopping}
+                        >
+                          {deleting[m.name] ? "..." : "Delete"}
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

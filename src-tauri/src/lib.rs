@@ -247,14 +247,54 @@ async fn list_installed_models() -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-/// Start ollama serve as a background process
+/// Start ollama serve as a background process with multi-model support.
+/// Kills any existing ollama serve process first to ensure OLLAMA_MAX_LOADED_MODELS is applied.
 #[tauri::command]
 async fn start_ollama() -> Result<String, String> {
+    // Kill any existing ollama serve so we can restart with the right env
+    let _ = Command::new("taskkill")
+        .args(["/F", "/IM", "ollama_llama_server.exe"])
+        .creation_flags(0x08000000)
+        .output();
+    let _ = Command::new("taskkill")
+        .args(["/F", "/IM", "ollama.exe"])
+        .creation_flags(0x08000000)
+        .output();
+
+    // Small delay to let the process fully exit
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
     std::process::Command::new("ollama")
         .arg("serve")
+        .env("OLLAMA_MAX_LOADED_MODELS", "4")
+        .creation_flags(0x08000000)
         .spawn()
         .map_err(|e| format!("Failed to start Ollama: {}", e))?;
     Ok("started".to_string())
+}
+
+/// Restart ollama with multi-model support enabled
+#[tauri::command]
+async fn restart_ollama() -> Result<String, String> {
+    // Kill existing
+    let _ = Command::new("taskkill")
+        .args(["/F", "/IM", "ollama_llama_server.exe"])
+        .creation_flags(0x08000000)
+        .output();
+    let _ = Command::new("taskkill")
+        .args(["/F", "/IM", "ollama.exe"])
+        .creation_flags(0x08000000)
+        .output();
+
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+
+    std::process::Command::new("ollama")
+        .arg("serve")
+        .env("OLLAMA_MAX_LOADED_MODELS", "4")
+        .creation_flags(0x08000000)
+        .spawn()
+        .map_err(|e| format!("Failed to restart Ollama: {}", e))?;
+    Ok("restarted".to_string())
 }
 
 /// Get system hardware info via PowerShell (Windows 11 compatible)
@@ -452,21 +492,82 @@ async fn delete_model(model: String) -> Result<String, String> {
     }
 }
 
-/// Stop a running model in Ollama
+/// Stop a running model in Ollama by setting keep_alive to 0
 #[tauri::command]
 async fn stop_model(model: String) -> Result<String, String> {
-    let output = Command::new("ollama")
-        .args(["stop", &model])
-        .creation_flags(0x08000000)
-        .output()
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let body = serde_json::json!({
+        "model": model,
+        "prompt": "",
+        "keep_alive": 0
+    });
+
+    let response = client
+        .post(format!("{}/api/generate", ollama_base_url()))
+        .json(&body)
+        .send()
+        .await
         .map_err(|e| format!("Failed to stop model: {}", e))?;
 
-    if output.status.success() {
+    if response.status().is_success() {
         Ok("stopped".to_string())
     } else {
-        let err = String::from_utf8_lossy(&output.stderr);
-        Err(format!("Stop failed: {}", err))
+        let text = response.text().await.unwrap_or_default();
+        Err(format!("Stop failed: {}", text))
     }
+}
+
+/// Run (load) a model in Ollama so it's ready for inference.
+/// Uses keep_alive=-1 so the model stays loaded until explicitly stopped.
+/// This allows multiple models to be loaded simultaneously.
+#[tauri::command]
+async fn run_model(model: String) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let body = serde_json::json!({
+        "model": model,
+        "prompt": "",
+        "keep_alive": -1
+    });
+
+    let response = client
+        .post(format!("{}/api/generate", ollama_base_url()))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to start model: {}", e))?;
+
+    if response.status().is_success() {
+        Ok("running".to_string())
+    } else {
+        let text = response.text().await.unwrap_or_default();
+        Err(format!("Failed to start model: {}", text))
+    }
+}
+
+/// List currently running/loaded models in Ollama
+#[tauri::command]
+async fn list_running_models() -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let response = client
+        .get(format!("{}/api/ps", ollama_base_url()))
+        .send()
+        .await
+        .map_err(|e| format!("Cannot reach Ollama: {}", e))?;
+
+    let text = response.text().await.unwrap_or_else(|_| "{}".to_string());
+    Ok(text)
 }
 
 /// Format bytes into human-readable size
@@ -486,7 +587,7 @@ fn format_size(bytes: u64) -> String {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![chat_ollama, list_ollama_models, discover_providers, list_installed_models, start_ollama, get_system_info, pull_model, delete_model, stop_model])
+        .invoke_handler(tauri::generate_handler![chat_ollama, list_ollama_models, discover_providers, list_installed_models, start_ollama, restart_ollama, get_system_info, pull_model, delete_model, stop_model, run_model, list_running_models])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

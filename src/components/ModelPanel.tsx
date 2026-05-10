@@ -14,6 +14,10 @@ interface ProviderStatus {
   models: string[];
 }
 
+interface RunningEntry {
+  name: string;
+}
+
 function parseOllamaList(output: string): InstalledModel[] {
   const lines = output.trim().split("\n");
   if (lines.length <= 1) return [];
@@ -49,14 +53,22 @@ export default function ModelPanel({ onAddModel }: { onAddModel?: () => void }) 
       setModels([]);
     }
 
-    // Check if ollama serve is running by trying discover_providers
+    // Check if ollama serve is running
     try {
       const result = await invoke<string>("discover_providers");
       const providers: ProviderStatus[] = JSON.parse(result);
       const ollama = providers.find((p) => p.name === "Ollama");
       if (ollama && ollama.status === "connected") {
         setOllamaRunning(true);
-        setRunningModels(ollama.models);
+        // Use /api/ps to get actually running/loaded models
+        try {
+          const psResult = await invoke<string>("list_running_models");
+          const psData = JSON.parse(psResult);
+          const running: RunningEntry[] = psData.models || [];
+          setRunningModels(running.map((m) => m.name));
+        } catch {
+          setRunningModels([]);
+        }
       } else {
         setOllamaRunning(false);
         setRunningModels([]);
@@ -83,7 +95,11 @@ export default function ModelPanel({ onAddModel }: { onAddModel?: () => void }) 
   }
 
   function isModelRunning(name: string): boolean {
-    return runningModels.some((r) => r === name || r.startsWith(name.split(":")[0]));
+    const baseName = name.split(":")[0];
+    return runningModels.some((r) => {
+      const rBase = r.split(":")[0];
+      return r === name || rBase === baseName || r === name + ":latest" || name === r + ":latest";
+    });
   }
 
   return (
