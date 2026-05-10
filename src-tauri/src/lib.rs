@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::io::{BufRead, BufReader};
+use std::os::windows::process::CommandExt;
+use std::process::{Command, Stdio};
 use tauri::Emitter;
 use futures_util::StreamExt;
 
@@ -54,6 +57,32 @@ struct OpenAIModelList {
 #[derive(Deserialize)]
 struct OpenAIModelEntry {
     id: String,
+}
+
+#[derive(Clone, Serialize)]
+struct PullProgress {
+    model: String,
+    status: String,
+    percent: f64,
+}
+
+#[derive(Serialize)]
+struct SystemInfo {
+    cpu_name: String,
+    cpu_cores: String,
+    ram_total: String,
+    ram_free: String,
+    gpu_name: String,
+    gpu_vram: String,
+    disks: Vec<DiskInfo>,
+}
+
+#[derive(Serialize)]
+struct DiskInfo {
+    name: String,
+    total: String,
+    free: String,
+    used_percent: f64,
 }
 
 // ── Tauri Commands ──
@@ -228,6 +257,218 @@ async fn start_ollama() -> Result<String, String> {
     Ok("started".to_string())
 }
 
+/// Get system hardware info via PowerShell (Windows 11 compatible)
+#[tauri::command]
+async fn get_system_info() -> Result<String, String> {
+    fn run_ps(script: &str) -> String {
+        Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", script])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default()
+    }
+
+    fn bytes_to_gb(val: f64) -> String {
+        format!("{:.0} GB", val / 1_073_741_824.0)
+    }
+
+    fn kb_to_gb(val: f64) -> String {
+        format!("{:.1} GB", val / 1_048_576.0)
+    }
+
+    // CPU
+    let cpu_json = run_ps("Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores | ConvertTo-Json");
+    let cpu_name;
+    let cpu_cores;
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&cpu_json) {
+        cpu_name = v["Name"].as_str().unwrap_or("Unknown").trim().to_string();
+        cpu_cores = v["NumberOfCores"].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "Unknown".to_string());
+    } else {
+        cpu_name = "Unknown".to_string();
+        cpu_cores = "Unknown".to_string();
+    }
+
+    // RAM total
+    let ram_total_json = run_ps("Get-CimInstance Win32_ComputerSystem | Select-Object TotalPhysicalMemory | ConvertTo-Json");
+    let ram_total = serde_json::from_str::<serde_json::Value>(&ram_total_json)
+        .ok()
+        .and_then(|v| v["TotalPhysicalMemory"].as_f64())
+        .map(bytes_to_gb)
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    // RAM free
+    let ram_free_json = run_ps("Get-CimInstance Win32_OperatingSystem | Select-Object FreePhysicalMemory | ConvertTo-Json");
+    let ram_free = serde_json::from_str::<serde_json::Value>(&ram_free_json)
+        .ok()
+        .and_then(|v| v["FreePhysicalMemory"].as_f64())
+        .map(kb_to_gb)
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    // GPU — try nvidia-smi first for accurate VRAM (AdapterRAM is 32-bit, caps at 4GB)
+    let nvidia_smi_out = run_ps("nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>$null");
+    let (gpu_name, gpu_vram);
+    if !nvidia_smi_out.is_empty() && !nvidia_smi_out.contains("not recognized") {
+        // nvidia-smi returns e.g. "NVIDIA GeForce RTX 5070 Ti Laptop GPU, 12227 MiB"
+        let parts: Vec<&str> = nvidia_smi_out.splitn(2, ", ").collect();
+        gpu_name = parts.first().unwrap_or(&"Unknown").trim().to_string();
+        let vram_str = parts.get(1).unwrap_or(&"Unknown").trim().to_string();
+        // Convert "12227 MiB" to "12 GB"
+        gpu_vram = vram_str
+            .split_whitespace()
+            .next()
+            .and_then(|n| n.parse::<f64>().ok())
+            .map(|mib| format!("{:.0} GB", mib / 1024.0))
+            .unwrap_or(vram_str);
+    } else {
+        // Fallback to WMI (AdapterRAM may overflow for >4GB GPUs)
+        let gpu_json = run_ps("Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM | ConvertTo-Json");
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&gpu_json) {
+            let entries: Vec<&serde_json::Value> = if v.is_array() {
+                v.as_array().unwrap().iter().collect()
+            } else {
+                vec![&v]
+            };
+            let best = entries.iter()
+                .max_by_key(|e| e["AdapterRAM"].as_u64().unwrap_or(0))
+                .copied();
+            gpu_name = best
+                .and_then(|e| e["Name"].as_str())
+                .unwrap_or("Unknown").trim().to_string();
+            gpu_vram = best
+                .and_then(|e| e["AdapterRAM"].as_f64())
+                .map(bytes_to_gb)
+                .unwrap_or_else(|| "Unknown".to_string());
+        } else {
+            gpu_name = "Unknown".to_string();
+            gpu_vram = "Unknown".to_string();
+        }
+    }
+
+    // Disks
+    let disk_json = run_ps("Get-CimInstance Win32_LogicalDisk | Select-Object Name,Size,FreeSpace | ConvertTo-Json");
+    let mut disks: Vec<DiskInfo> = Vec::new();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&disk_json) {
+        let entries: Vec<&serde_json::Value> = if v.is_array() {
+            v.as_array().unwrap().iter().collect()
+        } else {
+            vec![&v]
+        };
+        for entry in entries {
+            let name = entry["Name"].as_str().unwrap_or("").to_string();
+            let total_b = entry["Size"].as_f64().unwrap_or(0.0);
+            let free_b = entry["FreeSpace"].as_f64().unwrap_or(0.0);
+            if total_b <= 0.0 || name.is_empty() {
+                continue;
+            }
+            let used_percent = ((total_b - free_b) / total_b * 100.0).round();
+            disks.push(DiskInfo {
+                name: format!("{}\\", name),
+                total: bytes_to_gb(total_b),
+                free: bytes_to_gb(free_b),
+                used_percent,
+            });
+        }
+    }
+
+    let info = SystemInfo {
+        cpu_name,
+        cpu_cores,
+        ram_total,
+        ram_free,
+        gpu_name,
+        gpu_vram,
+        disks,
+    };
+
+    serde_json::to_string(&info).map_err(|e| format!("JSON error: {}", e))
+}
+
+/// Pull a model from Ollama with progress events
+#[tauri::command]
+async fn pull_model(app: tauri::AppHandle, model: String) -> Result<String, String> {
+    let mut child = Command::new("ollama")
+        .arg("pull")
+        .arg(&model)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(0x08000000)
+        .spawn()
+        .map_err(|e| format!("Failed to start ollama pull: {}", e))?;
+
+    let stderr = child.stderr.take().ok_or("No stderr")?;
+    let reader = BufReader::new(stderr);
+
+    for line in reader.lines() {
+        if let Ok(line) = line {
+            let trimmed = line.trim().to_string();
+            if trimmed.is_empty() {
+                continue;
+            }
+            // Try to parse percent from lines like "pulling abc123...  45%"
+            let percent = trimmed
+                .split_whitespace()
+                .filter_map(|w| w.trim_end_matches('%').parse::<f64>().ok())
+                .last()
+                .unwrap_or(0.0);
+
+            let _ = app.emit("pull-progress", PullProgress {
+                model: model.clone(),
+                status: trimmed,
+                percent,
+            });
+        }
+    }
+
+    let status = child.wait().map_err(|e| format!("Wait error: {}", e))?;
+    if status.success() {
+        let _ = app.emit("pull-progress", PullProgress {
+            model: model.clone(),
+            status: "complete".to_string(),
+            percent: 100.0,
+        });
+        Ok("done".to_string())
+    } else {
+        Err(format!("ollama pull failed with exit code: {:?}", status.code()))
+    }
+}
+
+/// Delete a model from Ollama
+#[tauri::command]
+async fn delete_model(model: String) -> Result<String, String> {
+    let output = Command::new("ollama")
+        .args(["rm", &model])
+        .creation_flags(0x08000000)
+        .output()
+        .map_err(|e| format!("Failed to delete model: {}", e))?;
+
+    if output.status.success() {
+        Ok("deleted".to_string())
+    } else {
+        let err = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Delete failed: {}", err))
+    }
+}
+
+/// Stop a running model in Ollama
+#[tauri::command]
+async fn stop_model(model: String) -> Result<String, String> {
+    let output = Command::new("ollama")
+        .args(["stop", &model])
+        .creation_flags(0x08000000)
+        .output()
+        .map_err(|e| format!("Failed to stop model: {}", e))?;
+
+    if output.status.success() {
+        Ok("stopped".to_string())
+    } else {
+        let err = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Stop failed: {}", err))
+    }
+}
+
 /// Format bytes into human-readable size
 fn format_size(bytes: u64) -> String {
     let gb = bytes as f64 / 1_073_741_824.0;
@@ -245,7 +486,7 @@ fn format_size(bytes: u64) -> String {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![chat_ollama, list_ollama_models, discover_providers, list_installed_models, start_ollama])
+        .invoke_handler(tauri::generate_handler![chat_ollama, list_ollama_models, discover_providers, list_installed_models, start_ollama, get_system_info, pull_model, delete_model, stop_model])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

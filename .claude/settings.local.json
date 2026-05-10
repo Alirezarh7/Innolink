@@ -28,7 +28,17 @@
       "Bash(taskkill:*)",
       "Bash(ie4uinit.exe:*)",
       "Bash(curl:*)",
-      "Bash(tasklist:*)"
+      "Bash(tasklist:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run build:*)",
+      "Bash(wmic cpu get:*)",
+      "Bash(powershell.exe -NoProfile -Command \"Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores | ConvertTo-Json\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-CimInstance Win32_ComputerSystem | Select-Object TotalPhysicalMemory | ConvertTo-Json\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-CimInstance Win32_OperatingSystem | Select-Object FreePhysicalMemory | ConvertTo-Json\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM | ConvertTo-Json\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-CimInstance Win32_LogicalDisk | Select-Object Name,Size,FreeSpace | ConvertTo-Json\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM,@{N=''DriverVersion'';E={$_DriverVersion}} | ConvertTo-Json\")",
+      "Bash(powershell.exe -NoProfile -Command:*)"
     ]
   }
 }
